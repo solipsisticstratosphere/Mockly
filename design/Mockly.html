@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mockly — AI Interview Prep</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Mulish:wght@400;600;700;800&display=swap');
+  :root { --font-sans: 'Mulish', 'Proxima Nova', -apple-system, system-ui, sans-serif; }
+  * { -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; background: #DDE4EC; }
+  body {
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--font-sans); overflow: hidden;
+  }
+  #stage { display: flex; align-items: center; justify-content: center; }
+  #app { display: contents; }
+  textarea::placeholder, input::placeholder { color: #9AA4AD; }
+  ::-webkit-scrollbar { width: 0; height: 0; }
+  @keyframes mspin { to { transform: rotate(360deg); } }
+  @keyframes mpulse { 0%,100% { opacity: 1; } 50% { opacity: 0.25; } }
+  @keyframes mfade { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+</style>
+</head>
+<body>
+  <div id="stage"><div id="app"></div></div>
+
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+  <script type="text/babel" src="ios-frame.jsx"></script>
+  <script type="text/babel" src="MocklyData.jsx"></script>
+  <script type="text/babel" src="MocklyKit.jsx"></script>
+  <script type="text/babel" src="MocklyTabs.jsx"></script>
+  <script type="text/babel" src="MocklySession.jsx"></script>
+
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+    const LS = 'mockly_state_v1';
+
+    // ─── Sign-in (brand entry) ──────────────────────────────────
+    function SignIn({ onSignIn }) {
+      const [email, setEmail] = useState('alex.rivera@gmail.com');
+      const [pwd, setPwd] = useState('demo1234');
+      return (
+        <div style={{ background: M.blue800, minHeight: '100%', display: 'flex', flexDirection: 'column', padding: '0 24px 32px' }}>
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', textAlign: 'center' }}>
+            <div style={{ width: 76, height: 76, borderRadius: 22, background: 'rgba(255,255,255,0.12)', display: 'grid', placeItems: 'center', marginBottom: 22 }}>
+              <Icon name="message" size={40} color="#fff" />
+              <div style={{ position: 'absolute', marginTop: 4, marginLeft: 2 }}><Icon name="sparkle" size={18} color="#5BC98A" fill /></div>
+            </div>
+            <div style={{ fontFamily: M.font, fontWeight: 800, fontSize: 36, color: '#fff', letterSpacing: '-0.01em' }}>Mockly</div>
+            <div style={{ fontFamily: M.font, fontSize: 15, color: 'rgba(255,255,255,0.75)', marginTop: 8, lineHeight: '22px', maxWidth: 260 }}>AI-powered mock interviews that score every answer and track your readiness.</div>
+          </div>
+          <div style={{ background: M.white, borderRadius: 18, padding: 18, display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <Field label="Email" value={email} onChange={setEmail} />
+            <Field label="Password" value={pwd} onChange={setPwd} type="password" />
+            <div style={{ marginTop: 4 }}>
+              <Button full size="lg" onClick={onSignIn}>Sign In</Button>
+            </div>
+            <div style={{ textAlign: 'center', fontFamily: M.font, fontSize: 13, color: M.n70 }}>
+              New here? <span style={{ color: M.blue700, fontWeight: 700 }}>Create account</span>
+            </div>
+          </div>
+        </div>
+      );
+    }
+    function Field({ label, value, onChange, type = 'text' }) {
+      const [f, setF] = useState(false);
+      return (
+        <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <span style={{ fontFamily: M.font, fontWeight: 700, fontSize: 13, color: M.n100 }}>{label}</span>
+          <input type={type} value={value} onChange={e => onChange(e.target.value)} onFocus={() => setF(true)} onBlur={() => setF(false)}
+            style={{ height: 48, padding: '0 14px', borderRadius: 10, border: `1px solid ${f ? M.blue700 : M.n30}`, boxShadow: f ? '0 0 0 3px rgba(1,89,166,0.18)' : 'none', fontFamily: M.font, fontSize: 16, color: M.n100, outline: 'none', transition: 'all 120ms' }} />
+        </label>
+      );
+    }
+
+    function App() {
+      const saved = (() => { try { return JSON.parse(localStorage.getItem(LS)) || {}; } catch { return {}; } })();
+      const [signed, setSigned] = useState(saved.signed ?? false);
+      const [tab, setTab] = useState(saved.tab || 'home');
+      const [flow, setFlow] = useState(null);   // null | 'setup' | 'interview' | 'result'
+      const [config, setConfig] = useState(null);
+      const [result, setResult] = useState(null);
+      const [detail, setDetail] = useState(null); // a past session
+
+      useEffect(() => {
+        localStorage.setItem(LS, JSON.stringify({ signed, tab }));
+      }, [signed, tab]);
+
+      const startSession = () => { setFlow('setup'); };
+      const exitFlow = () => { setFlow(null); setConfig(null); };
+
+      let content, showTabBar = false;
+
+      if (!signed) {
+        content = <SignIn onSignIn={() => setSigned(true)} />;
+      } else if (detail) {
+        content = <SessionDetailScreen session={detail} onClose={() => setDetail(null)} onAgain={() => { setDetail(null); setFlow('setup'); }} />;
+      } else if (flow === 'setup') {
+        content = <SetupScreen onClose={exitFlow} onStart={(c) => { setConfig(c); setFlow('interview'); }} />;
+      } else if (flow === 'interview') {
+        content = <InterviewScreen config={config} onClose={exitFlow} onComplete={(r) => { setResult(r); setFlow('result'); }} />;
+      } else if (flow === 'result') {
+        content = <ResultScreen result={result} onDone={() => { exitFlow(); setTab('home'); }} onAgain={() => { setResult(null); setFlow('setup'); }} />;
+      } else {
+        showTabBar = true;
+        if (tab === 'home') content = <HomeScreen onStart={startSession} onOpenSession={setDetail} onTab={setTab} />;
+        else if (tab === 'history') content = <HistoryScreen onOpenSession={setDetail} />;
+        else if (tab === 'analytics') content = <AnalyticsScreen />;
+        else if (tab === 'profile') content = <ProfileScreen onSignOut={() => { setSigned(false); setTab('home'); }} />;
+      }
+
+      return (
+        <IOSDevice width={390} height={844}>
+          <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: signed && flow === null && !detail && tab !== 'home' ? M.n10 : M.n10 }}>
+            <div style={{ height: 50, flexShrink: 0, background: heroTopColor(signed, flow, detail, tab) }} />
+            <div style={{ flex: 1, minHeight: 0, overflow: 'auto', WebkitOverflowScrolling: 'touch', position: 'relative' }}>
+              {content}
+            </div>
+            {showTabBar && <TabBar active={tab} onChange={setTab} onStart={startSession} />}
+          </div>
+        </IOSDevice>
+      );
+    }
+
+    // Status-bar inset color matches the screen's top (navy hero vs light)
+    function heroTopColor(signed, flow, detail, tab) {
+      if (!signed) return M.blue800;
+      if (detail) return M.blue800;
+      if (flow === 'interview' || flow === 'result') return M.blue800;
+      if (flow === 'setup') return M.white;
+      if (tab === 'home' || tab === 'analytics' || tab === 'profile') return M.blue800;
+      return M.white;
+    }
+
+    // Responsive scale: fit the 390×844 device into the viewport
+    function fit() {
+      const dev = document.querySelector('#app > div');
+      const stage = document.getElementById('stage');
+      if (!dev) { requestAnimationFrame(fit); return; }
+      const W = 390, H = 844, margin = 24;
+      const s = Math.min((window.innerWidth - margin) / W, (window.innerHeight - margin) / H, 1.15);
+      stage.style.transform = `scale(${s})`;
+      stage.style.transformOrigin = 'center center';
+    }
+    window.addEventListener('resize', fit);
+
+    function mount() {
+      if (!window.SetupScreen || !window.HomeScreen || !window.IOSDevice) { setTimeout(mount, 30); return; }
+      ReactDOM.createRoot(document.getElementById('app')).render(<App />);
+      setTimeout(fit, 60);
+    }
+    mount();
+  </script>
+</body>
+</html>
