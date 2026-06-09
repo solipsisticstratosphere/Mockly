@@ -45,9 +45,20 @@ export async function apiDelete(path: string): Promise<void> {
 
 export async function apiPostFormData<T>(path: string, formData: FormData): Promise<T> {
   const { data: { session } } = await supabase.auth.getSession();
-  const headers: Record<string, string> = {};
-  if (session?.access_token) headers['Authorization'] = `Bearer ${session.access_token}`;
-  const res = await fetch(`${BASE_URL}${path}`, { method: 'POST', headers, body: formData });
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
+  const token = session?.access_token;
+  return new Promise<T>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${BASE_URL}${path}`);
+    if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try { resolve(JSON.parse(xhr.responseText)); }
+        catch { reject(new Error(xhr.responseText)); }
+      } else {
+        reject(new Error(xhr.responseText || `HTTP ${xhr.status}`));
+      }
+    };
+    xhr.onerror = () => reject(new Error('Network error'));
+    xhr.send(formData);
+  });
 }

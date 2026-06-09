@@ -10,7 +10,7 @@ import analyticsRoutes from './routes/analytics.routes';
 
 const app = express();
 
-app.use(cors({ origin: process.env.ALLOWED_ORIGINS?.split(',') ?? '*' }));
+app.use(cors({ origin: process.env.ALLOWED_ORIGINS?.split(',') ?? false }));
 app.use(express.json());
 
 app.use((req, res, next) => {

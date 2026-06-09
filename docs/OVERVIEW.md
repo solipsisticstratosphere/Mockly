@@ -56,7 +56,7 @@
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                   React Native App (Expo)                │
-│  Expo Router │ Zustand │ React Query │ Expo AV/Notif    │
+│  Expo Router │ Zustand │ React Query │ expo-audio/Speech│
 └──────────────────────────┬──────────────────────────────┘
                            │ HTTPS / WebSocket
                            ▼
@@ -117,7 +117,8 @@ WebSockets are used exclusively for streaming AI feedback in real time (token-by
 | @tanstack/react-query | ^5.0.0 | Server state caching, background refetch, optimistic updates |
 | react-hook-form | ^7.50.0 | Performant form handling, minimal re-renders |
 | zod | ^3.22.0 | Runtime validation, shared with backend |
-| expo-av | ~15.0.0 | Audio recording for voice mode |
+| expo-audio | ~56.0.11 | Audio recording for voice mode (Expo Go compatible). **Planned migration:** switch back to `expo-av ~16.x` once a dev build is set up — `expo-av` requires native rebuild and is not available in Expo Go for SDK 56+. The recording API will change: `useAudioRecorder` → `Audio.Recording.createAsync`, `setAudioModeAsync({ allowsRecording })` → `Audio.setAudioModeAsync({ allowsRecordingIOS })`. See `apps/mobile/app/session/[id].tsx` VoicePanel and its TODO comment. |
+| expo-speech | ~14.0.0 | TTS — AI coach reads questions aloud in voice mode |
 | expo-notifications | ~0.29.0 | Push notification scheduling + FCM integration |
 | expo-sqlite | ~14.0.0 | Offline session cache |
 | @supabase/supabase-js | ^2.45.0 | Direct auth token management on device |
@@ -1001,7 +1002,9 @@ On the mobile side, always get the current token from `supabase.auth.getSession(
 
 ### 12.2 Voice Mode Audio Format
 
-Expo AV records `.m4a` (AAC) by default on both iOS and Android. Groq Whisper accepts: `mp3`, `mp4`, `mpeg`, `mpga`, `m4a`, `wav`, `webm`. Do NOT transcode — send the `.m4a` directly. Use `RecordingOptionsPresets.HIGH_QUALITY` for best Whisper accuracy. Hard limit: 25 MB (Groq API). A 3-minute HIGH_QUALITY recording is ~2–4 MB — well within limits.
+`expo-audio` records `.m4a` (AAC) via `RecordingPresets.HIGH_QUALITY` on both iOS and Android. Groq Whisper accepts: `mp3`, `mp4`, `mpeg`, `mpga`, `m4a`, `wav`, `webm`. Do NOT transcode — send `.m4a` directly. Hard limit: 25 MB (Groq API). A 3-minute HIGH_QUALITY recording is ~2–4 MB — well within limits.
+
+**Note:** `expo-audio` is used instead of `expo-av` because `expo-av ~16.x` requires a native dev build (not available in Expo Go for SDK 56+). Once a dev build is set up, migrate back to `expo-av` — the recording API differs: use `Audio.Recording.createAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY)` and `Audio.setAudioModeAsync({ allowsRecordingIOS: true })`. See TODO comment in `VoicePanel` in `apps/mobile/app/session/[id].tsx`.
 
 ### 12.3 Adaptive Difficulty Logic
 

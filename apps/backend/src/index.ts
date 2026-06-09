@@ -1,10 +1,9 @@
 import 'dotenv/config';
 import http from 'http';
 import { WebSocketServer } from 'ws';
-import jwt from 'jsonwebtoken';
-import jwksClient from 'jwks-rsa';
 import app from './app';
 import { logger } from './config/logger';
+import { verifyJwt } from './config/jwks';
 import { streamFeedback } from './services/groq.service';
 import { supabase } from './config/supabase';
 
@@ -13,19 +12,12 @@ const server = http.createServer(app);
 
 const wss = new WebSocketServer({ server, path: '/ws' });
 
-const jwks = jwksClient({
-  jwksUri: `${process.env.SUPABASE_URL}/auth/v1/.well-known/jwks.json`,
-  cache: true,
-});
-
 wss.on('connection', async (ws, req) => {
   const token = req.headers.authorization?.split(' ')[1] ?? new URL(req.url ?? '', 'ws://x').searchParams.get('token');
   if (!token) { ws.close(1008, 'Unauthorized'); return; }
 
   try {
-    const decoded = await new Promise<any>((res, rej) =>
-      jwt.verify(token, (h, cb) => jwks.getSigningKey(h.kid!, (e, k) => cb(e, k?.getPublicKey())), { algorithms: ['RS256'] }, (e, d) => e ? rej(e) : res(d))
-    );
+    const decoded = await verifyJwt(token);
     const userId = decoded.sub as string;
 
     ws.on('message', async (raw) => {

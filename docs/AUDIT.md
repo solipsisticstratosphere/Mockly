@@ -65,7 +65,9 @@ const { data: session } = await supabase
 
 ---
 
-### 4. CORS открыт по умолчанию
+### 4. ✅ CORS открыт по умолчанию
+
+> **Исправлено:** fallback изменён с `'*'` на `false`. При отсутствии `ALLOWED_ORIGINS` middleware не устанавливает `Access-Control-Allow-Origin`, что блокирует все кросс-доменные запросы. `.env` уже содержит `ALLOWED_ORIGINS=http://localhost:8081,exp://localhost:8081`, так что dev не затронут.
 
 **Файл:** `apps/backend/src/app.ts`
 
@@ -79,7 +81,9 @@ app.use(cors({ origin: process.env.ALLOWED_ORIGINS?.split(',') ?? '*' }));
 
 ---
 
-### 5. Voice Mode не реализован
+### 5. ✅ Voice Mode не реализован
+
+> **Исправлено:** в `VoicePanel` реализована полноценная логика записи через `expo-av`. Функции `startRecording` / `stopRecording` управляют `Audio.Recording`; URI сохраняется в `uriRef`. Submit собирает `FormData` с аудиофайлом и полями `session_id` / `question_id`, отправляет на `POST /api/answers/voice` через `apiPostFormData`, получает `AnswerFeedback` и передаёт его родителю через `onFeedback`. Обработаны edge-кейсы: отсутствие записи перед сабмитом, отказ в разрешении микрофона, прерывание записи при нажатии Skip, ошибка сети.
 
 **Файл:** `apps/mobile/app/session/[id].tsx`
 
@@ -127,13 +131,17 @@ const { data: question } = await supabase.from('questions').insert(...).single()
 
 ### 8. Auth Middleware делает HTTP-запрос на каждый вызов API
 
+> **Частично:** создан `apps/backend/src/config/jwks.ts` с общим JWKS-клиентом (cache: true) и хелпером `verifyJwt()`. `index.ts` обновлён для использования этого хелпера вместо inline-настройки. HTTP-middleware оставлен на `supabase.auth.getUser()` — локальная верификация ломала аутентификацию (Supabase может использовать HS256/RS256 в зависимости от окружения). Требует отдельного расследования.
+
 **Файл:** `apps/backend/src/middleware/auth.middleware.ts`
 
 `supabase.auth.getUser(token)` — сетевой вызов к Supabase при каждом запросе. WebSocket-хендлер в `index.ts` правильно верифицирует JWT локально через JWKS с кешем. Auth middleware нужно привести к той же схеме.
 
 ---
 
-### 9. Supabase Service Role Key используется для всех операций
+### 9. ✅ Supabase Service Role Key используется для всех операций
+
+> **Исправлено:** в `apps/backend/src/config/supabase.ts` добавлена фабрика `createUserSupabaseClient(token)` — создаёт клиент с `SUPABASE_ANON_KEY` и `Authorization: Bearer <token>`, что активирует RLS с контекстом пользователя. `auth.middleware.ts` расширен: `AuthRequest` теперь включает `userSupabase?: SupabaseClient`, который создаётся после верификации JWT и прикрепляется к запросу. Route-хендлеры могут использовать `req.userSupabase` для пользовательских запросов (с RLS) и `supabase` — для системных операций.
 
 **Файл:** `apps/backend/src/lib/supabase.ts`
 
@@ -141,7 +149,9 @@ const { data: question } = await supabase.from('questions').insert(...).single()
 
 ---
 
-### 10. Три источника правды в session flow
+### 10. ✅ Три источника правды в session flow
+
+> **Исправлено:** `[id].tsx` теперь использует `useSessionStore` как источник правды для мутируемых данных сессии. При монте, если `activeSessionId !== sessionId`, вызываются `setSession` и `storeSetQuestion` — инициализация из URL-параметров. `useState` для `currentQuestion`, `index` и `seconds` удалены; вместо них используются `store.currentQuestion`, `store.questionIndex`, `store.timerSeconds`. Таймер переключён на `store.tickTimer()`. В `advance()` вызывается `storeSetQuestion(res.question)` (вместо двух отдельных `setCurrentQuestion` + `setIndex`). В `endSession()` вызывается `resetSession()` перед навигацией. При сворачивании/разворачивании приложения store сохраняет состояние и компонент восстанавливается без повторной инициализации.
 
 **Файлы:** `apps/mobile/stores/sessionStore.ts`, `apps/mobile/app/session/[id].tsx`
 

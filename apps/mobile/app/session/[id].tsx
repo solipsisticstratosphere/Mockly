@@ -9,9 +9,13 @@ import { Badge } from '../../components/ui/Badge';
 import { ScoreBar } from '../../components/ui/ScoreBar';
 import { scoreColor, scoreLabel } from '../../utils/score';
 import { useQueryClient } from '@tanstack/react-query';
-import { apiPost, apiPatch } from '../../lib/api';
+// TODO: switch back to expo-av once dev build is set up (expo-av requires native rebuild, not in Expo Go)
+import { useAudioRecorder, useAudioRecorderState, requestRecordingPermissionsAsync, setAudioModeAsync, RecordingPresets } from 'expo-audio';
+import * as Speech from 'expo-speech';
+import { apiPost, apiPatch, apiPostFormData } from '../../lib/api';
 import { useTheme } from '../../lib/theme';
-import type { Question, AnswerFeedback } from '@mockly/shared';
+import { useSessionStore } from '../../stores/sessionStore';
+import type { Question, AnswerFeedback, SessionMode, TopicKey } from '@mockly/shared';
 
 type Phase = 'answering' | 'analyzing' | 'feedback';
 
@@ -24,13 +28,14 @@ export default function InterviewScreen() {
   }>();
   const totalCount = Number(count ?? 8);
 
-  const [currentQuestion, setCurrentQuestion] = useState<Question | null>(() => {
-    try { return JSON.parse(firstQuestionRaw ?? '{}'); } catch { return null; }
-  });
-  const [index, setIndex] = useState(0);
+  const {
+    currentQuestion, setCurrentQuestion: storeSetQuestion,
+    questionIndex, timerSeconds, tickTimer,
+    setSession, resetSession, activeSessionId,
+  } = useSessionStore();
+
   const [answer, setAnswer] = useState('');
   const [phase, setPhase] = useState<Phase>('answering');
-  const [seconds, setSeconds] = useState(0);
   const [scores, setScores] = useState<(number | null)[]>([]);
   const [feedback, setFeedback] = useState<AnswerFeedback | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -40,11 +45,25 @@ export default function InterviewScreen() {
   const isVoice = mode === 'voice';
 
   useEffect(() => {
-    const timerId = setInterval(() => setSeconds(s => s + 1), 1000);
+    if (activeSessionId !== sessionId) {
+      const parsed = (() => { try { return JSON.parse(firstQuestionRaw ?? '{}'); } catch { return null; } })();
+      setSession(sessionId!, mode as SessionMode, topic as TopicKey, totalCount);
+      if (parsed?.id) storeSetQuestion(parsed);
+    }
+  }, []);
+
+  useEffect(() => {
+    const timerId = setInterval(() => tickTimer(), 1000);
     return () => clearInterval(timerId);
   }, []);
 
-  useEffect(() => { scrollRef.current?.scrollTo({ y: 0, animated: true }); }, [index, phase]);
+  useEffect(() => { scrollRef.current?.scrollTo({ y: 0, animated: true }); }, [questionIndex, phase]);
+
+  useEffect(() => {
+    if (!isVoice || !currentQuestion || phase !== 'answering') return;
+    Speech.speak(currentQuestion.text, { language: 'en-US' });
+    return () => { Speech.stop(); };
+  }, [currentQuestion?.id, isVoice, phase]);
 
   async function submitAnswer() {
     if (!currentQuestion || !sessionId) return;
@@ -79,7 +98,7 @@ export default function InterviewScreen() {
     const nextScores = score == null ? scores : [...scores, score];
     setScores(nextScores);
 
-    const isLast = index + 1 >= totalCount;
+    const isLast = questionIndex >= totalCount;
     if (isLast) {
       await endSession(nextScores);
       return;
@@ -90,8 +109,7 @@ export default function InterviewScreen() {
         session_id: sessionId,
         ...(score != null ? { previous_answer_score: score } : {}),
       });
-      setCurrentQuestion(res.question);
-      setIndex(i => i + 1);
+      storeSetQuestion(res.question);
       setAnswer('');
       setFeedback(null);
       setPhase('answering');
@@ -106,19 +124,20 @@ export default function InterviewScreen() {
     try {
       const res = await apiPatch<{ session: { readiness_delta: number | null; total_score: number | null } }>(
         `/api/sessions/${sessionId}/end`,
-        { duration_seconds: seconds }
+        { duration_seconds: timerSeconds }
       );
       queryClient.invalidateQueries({ queryKey: ['sessions'] });
       queryClient.invalidateQueries({ queryKey: ['analytics'] });
       const valid = finalScores.filter(s => s != null) as number[];
       const avg = valid.length ? valid.reduce((a, b) => a + b, 0) / valid.length : (res.session.total_score ?? 0);
+      resetSession();
       router.replace({
         pathname: '/session/result/[sessionId]',
         params: {
           sessionId: sessionId ?? 'done',
           avg: avg.toFixed(2),
           scores: JSON.stringify(finalScores),
-          seconds: String(seconds),
+          seconds: String(timerSeconds),
           topic: topic ?? 'react',
           answered: String(valid.length),
           delta: String(res.session.readiness_delta ?? 0),
@@ -127,13 +146,14 @@ export default function InterviewScreen() {
     } catch {
       const valid = finalScores.filter(s => s != null) as number[];
       const avg = valid.length ? valid.reduce((a, b) => a + b, 0) / valid.length : 0;
+      resetSession();
       router.replace({
         pathname: '/session/result/[sessionId]',
         params: {
           sessionId: sessionId ?? 'done',
           avg: avg.toFixed(2),
           scores: JSON.stringify(finalScores),
-          seconds: String(seconds),
+          seconds: String(timerSeconds),
           topic: topic ?? 'react',
           answered: String(valid.length),
           delta: '0',
@@ -166,8 +186,8 @@ export default function InterviewScreen() {
   }
 
   const q = currentQuestion;
-  const mm = String(Math.floor(seconds / 60)).padStart(2, '0');
-  const ss = String(seconds % 60).padStart(2, '0');
+  const mm = String(Math.floor(timerSeconds / 60)).padStart(2, '0');
+  const ss = String(timerSeconds % 60).padStart(2, '0');
 
   return (
     <View style={[styles.outer, { backgroundColor: theme.bg }]}>
@@ -180,11 +200,11 @@ export default function InterviewScreen() {
           <Icon name="clock" size={15} color="rgba(255,255,255,0.7)" />
           <Text style={styles.timer}>{mm}:{ss}</Text>
         </View>
-        <Text style={styles.progress}>{index + 1}/{totalCount}</Text>
+        <Text style={styles.progress}>{questionIndex}/{totalCount}</Text>
       </View>
       <View style={styles.dots}>
         {Array.from({ length: totalCount }).map((_, i) => (
-          <View key={i} style={[styles.dot, i <= index && styles.dotActive]} />
+          <View key={i} style={[styles.dot, i < questionIndex && styles.dotActive]} />
         ))}
       </View>
 
@@ -227,7 +247,7 @@ export default function InterviewScreen() {
           </View>
         )}
         {phase === 'answering' && isVoice && (
-          <VoicePanel onSkip={skip} onSubmit={submitAnswer} sessionId={sessionId ?? ''} questionId={q.id} onFeedback={(fb) => { setFeedback(fb); setPhase('feedback'); }} />
+          <VoicePanel onSkip={skip} sessionId={sessionId ?? ''} questionId={q.id} onFeedback={(fb) => { setFeedback(fb); setPhase('feedback'); }} />
         )}
         {phase === 'analyzing' && (
           <View style={styles.analyzing}>
@@ -250,8 +270,8 @@ export default function InterviewScreen() {
                 {savedToBank ? 'Saved to Bank' : 'Save to Question Bank'}
               </Text>
             </TouchableOpacity>
-            <Button full trailingIcon={index + 1 >= totalCount ? 'check' : 'arrowRight'} onPress={() => advance(feedback.score)}>
-              {index + 1 >= totalCount ? 'See Results' : 'Next Question'}
+            <Button full trailingIcon={questionIndex >= totalCount ? 'check' : 'arrowRight'} onPress={() => advance(feedback.score)}>
+              {questionIndex >= totalCount ? 'See Results' : 'Next Question'}
             </Button>
           </>
         )}
@@ -260,53 +280,118 @@ export default function InterviewScreen() {
   );
 }
 
-function VoicePanel({ onSkip, onSubmit, sessionId, questionId, onFeedback }: {
+function VoicePanel({ onSkip, sessionId, questionId, onFeedback }: {
   onSkip: () => void;
-  onSubmit: () => void;
   sessionId: string;
   questionId: string;
   onFeedback: (fb: AnswerFeedback) => void;
 }) {
   const theme = useTheme();
-  const [recording, setRecording] = useState(false);
+  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const { isRecording } = useAudioRecorderState(recorder);
   const [t, setT] = useState(0);
+  const [submitting, setSubmitting] = useState(false);
+  const uriRef = useRef<string | null>(null);
+
   useEffect(() => {
-    if (!recording) return;
+    if (!isRecording) return;
     const timerId = setInterval(() => setT(x => x + 1), 1000);
     return () => clearInterval(timerId);
-  }, [recording]);
+  }, [isRecording]);
+
+  async function startRecording() {
+    const { granted } = await requestRecordingPermissionsAsync();
+    if (!granted) {
+      Alert.alert('Permission required', 'Microphone access is required to record your answer. Please enable it in Settings.');
+      return;
+    }
+    Speech.stop();
+    await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
+    await recorder.prepareToRecordAsync();
+    recorder.record();
+    setT(0);
+  }
+
+  async function stopRecording(): Promise<string | null> {
+    await recorder.stop();
+    const uri = recorder.uri ?? null;
+    uriRef.current = uri;
+    await setAudioModeAsync({ allowsRecording: false });
+    return uri;
+  }
+
+  async function handleMicPress() {
+    if (isRecording) {
+      await stopRecording();
+    } else {
+      await startRecording();
+    }
+  }
+
+  async function handleSkip() {
+    if (isRecording) await stopRecording().catch(() => {});
+    onSkip();
+  }
+
+  async function handleSubmit() {
+    if (submitting) return;
+    const uri = isRecording ? await stopRecording() : uriRef.current;
+    if (!uri) {
+      Alert.alert('No recording', 'Please record your answer before submitting.');
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const formData = new FormData();
+      formData.append('audio', { uri, name: 'answer.m4a', type: 'audio/m4a' } as any);
+      formData.append('session_id', sessionId);
+      formData.append('question_id', questionId);
+      const result = await apiPostFormData<{ feedback: AnswerFeedback; transcript: string }>(
+        '/api/answers/voice', formData,
+      );
+      onFeedback(result.feedback);
+    } catch (e: any) {
+      Alert.alert('Upload failed', e?.message ?? 'Unknown error');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   const mm = String(Math.floor(t / 60)).padStart(2, '0');
   const ss = String(t % 60).padStart(2, '0');
   return (
     <View style={vStyles.wrap}>
-      {recording && (
+      {isRecording && (
         <View style={vStyles.recRow}>
           <View style={[vStyles.recDot, { backgroundColor: theme.red }]} />
           <Text style={[vStyles.recTimer, { color: theme.fg }]}>{mm}:{ss}</Text>
         </View>
       )}
-      {!recording && t === 0 && <Text style={[vStyles.hint, { color: theme.fgMuted }]}>Tap to record your spoken answer</Text>}
+      {!isRecording && t === 0 && <Text style={[vStyles.hint, { color: theme.fgMuted }]}>Tap to record your spoken answer</Text>}
       <View style={vStyles.btns}>
-        {(recording || t > 0) && (
-          <TouchableOpacity onPress={onSkip}>
+        {(isRecording || t > 0) && (
+          <TouchableOpacity onPress={handleSkip}>
             <Text style={[vStyles.skipText, { color: theme.fgMuted }]}>Skip</Text>
           </TouchableOpacity>
         )}
         <TouchableOpacity
-          onPress={() => setRecording(r => !r)}
-          style={[vStyles.micBtn, recording && { backgroundColor: theme.red }]}
+          onPress={handleMicPress}
+          style={[vStyles.micBtn, isRecording && { backgroundColor: theme.red }]}
         >
-          {recording
+          {isRecording
             ? <View style={vStyles.stopSquare} />
             : <Icon name="mic" size={26} color="#FFFFFF" />
           }
         </TouchableOpacity>
-        {(t > 0 && !recording) && (
-          <TouchableOpacity onPress={onSubmit}>
-            <Text style={[vStyles.submitText, { color: theme.blue700 }]}>Submit</Text>
+        {(t > 0 && !isRecording) && (
+          <TouchableOpacity onPress={handleSubmit} disabled={submitting}>
+            {submitting
+              ? <ActivityIndicator size="small" color={theme.blue700} />
+              : <Text style={[vStyles.submitText, { color: theme.blue700 }]}>Submit</Text>
+            }
           </TouchableOpacity>
         )}
-        {recording && <View style={{ width: 40 }} />}
+        {isRecording && <View style={{ width: 40 }} />}
       </View>
     </View>
   );

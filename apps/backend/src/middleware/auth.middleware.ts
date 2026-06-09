@@ -1,8 +1,11 @@
 import { Request, Response, NextFunction } from 'express';
-import { supabase } from '../config/supabase';
+import type { SupabaseClient } from '@supabase/supabase-js';
+import { verifyJwt } from '../config/jwks';
+import { createUserSupabaseClient } from '../config/supabase';
 
 export interface AuthRequest extends Request {
   userId?: string;
+  userSupabase?: SupabaseClient;
 }
 
 export async function authMiddleware(req: AuthRequest, res: Response, next: NextFunction) {
@@ -12,12 +15,12 @@ export async function authMiddleware(req: AuthRequest, res: Response, next: Next
     return;
   }
 
-  const { data, error } = await supabase.auth.getUser(token);
-  if (error || !data.user) {
+  try {
+    const decoded = await verifyJwt(token);
+    req.userId = decoded.sub as string;
+    req.userSupabase = createUserSupabaseClient(token);
+    next();
+  } catch {
     res.status(401).json({ error: 'Invalid token' });
-    return;
   }
-
-  req.userId = data.user.id;
-  next();
 }
