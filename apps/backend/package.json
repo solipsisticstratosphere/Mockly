@@ -32,6 +32,6 @@
     "@types/node": "^20.0.0",
     "@types/ws": "^8.5.12",
     "ts-node-dev": "^2.0.0",
-    "typescript": "^5.3.0"
+    "typescript": "^6.0.0"
   }
 }

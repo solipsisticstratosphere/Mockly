@@ -1,6 +1,16 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, TextInput, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import React, { useState, useEffect, useRef, useCallback, useMemo, memo } from 'react';
+import {
+  View,
+  Text,
+  TextInput,
+  StyleSheet,
+  ScrollView,
+  TouchableOpacity,
+  ActivityIndicator,
+  Alert,
+  BackHandler,
+} from 'react-native';
+import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import { Font } from '../../constants/typography';
 import { Icon } from '../../components/ui/Icon';
 import { Button } from '../../components/ui/Button';
@@ -10,7 +20,13 @@ import { ScoreBar } from '../../components/ui/ScoreBar';
 import { scoreColor, scoreLabel } from '../../utils/score';
 import { useQueryClient } from '@tanstack/react-query';
 // TODO: switch back to expo-av once dev build is set up (expo-av requires native rebuild, not in Expo Go)
-import { useAudioRecorder, useAudioRecorderState, requestRecordingPermissionsAsync, setAudioModeAsync, RecordingPresets } from 'expo-audio';
+import {
+  useAudioRecorder,
+  useAudioRecorderState,
+  requestRecordingPermissionsAsync,
+  setAudioModeAsync,
+  RecordingPresets,
+} from 'expo-audio';
 import * as Speech from 'expo-speech';
 import { apiPost, apiPatch, apiPostFormData } from '../../lib/api';
 import { useTheme } from '../../lib/theme';
@@ -23,22 +39,36 @@ export default function InterviewScreen() {
   const router = useRouter();
   const theme = useTheme();
   const queryClient = useQueryClient();
-  const { id: sessionId, mode, topic, count, firstQuestion: firstQuestionRaw } = useLocalSearchParams<{
-    id: string; mode: string; topic: string; count: string; firstQuestion: string;
+  const {
+    id: sessionId,
+    mode,
+    topic,
+    count,
+    firstQuestion: firstQuestionRaw,
+  } = useLocalSearchParams<{
+    id: string;
+    mode: string;
+    topic: string;
+    count: string;
+    firstQuestion: string;
   }>();
   const totalCount = Number(count ?? 8);
 
   const {
-    currentQuestion, setCurrentQuestion: storeSetQuestion,
-    questionIndex, timerSeconds, tickTimer,
-    setSession, resetSession, activeSessionId,
+    currentQuestion,
+    setCurrentQuestion: storeSetQuestion,
+    questionIndex,
+    timerSeconds,
+    tickTimer,
+    setSession,
+    resetSession,
+    activeSessionId,
   } = useSessionStore();
 
   const [answer, setAnswer] = useState('');
   const [phase, setPhase] = useState<Phase>('answering');
   const [scores, setScores] = useState<(number | null)[]>([]);
   const [feedback, setFeedback] = useState<AnswerFeedback | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
   const [savedToBank, setSavedToBank] = useState(false);
   const [isSavingToBank, setIsSavingToBank] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
@@ -46,7 +76,13 @@ export default function InterviewScreen() {
 
   useEffect(() => {
     if (activeSessionId !== sessionId) {
-      const parsed = (() => { try { return JSON.parse(firstQuestionRaw ?? '{}'); } catch { return null; } })();
+      const parsed = (() => {
+        try {
+          return JSON.parse(firstQuestionRaw ?? '{}');
+        } catch {
+          return null;
+        }
+      })();
       setSession(sessionId!, mode as SessionMode, topic as TopicKey, totalCount);
       if (parsed?.id) storeSetQuestion(parsed);
     }
@@ -57,17 +93,44 @@ export default function InterviewScreen() {
     return () => clearInterval(timerId);
   }, []);
 
-  useEffect(() => { scrollRef.current?.scrollTo({ y: 0, animated: true }); }, [questionIndex, phase]);
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ y: 0, animated: true });
+  }, [questionIndex, phase]);
+
+  useFocusEffect(
+    useCallback(() => {
+      const handler = BackHandler.addEventListener('hardwareBackPress', () => {
+        Alert.alert(
+          'Leave Session?',
+          'If you leave now, your progress in this session will be lost.',
+          [
+            { text: 'Stay', style: 'cancel' },
+            {
+              text: 'Leave',
+              style: 'destructive',
+              onPress: () => {
+                resetSession();
+                router.back();
+              },
+            },
+          ],
+        );
+        return true;
+      });
+      return () => handler.remove();
+    }, []),
+  );
 
   useEffect(() => {
     if (!isVoice || !currentQuestion || phase !== 'answering') return;
     Speech.speak(currentQuestion.text, { language: 'en-US' });
-    return () => { Speech.stop(); };
+    return () => {
+      Speech.stop();
+    };
   }, [currentQuestion?.id, isVoice, phase]);
 
   async function submitAnswer() {
     if (!currentQuestion || !sessionId) return;
-    setIsSubmitting(true);
     setPhase('analyzing');
 
     const controller = new AbortController();
@@ -83,14 +146,16 @@ export default function InterviewScreen() {
       setPhase('feedback');
     } catch (e: any) {
       if (e?.name === 'AbortError') {
-        Alert.alert('Timeout', 'Request took too long. Please check your connection and try again.');
+        Alert.alert(
+          'Timeout',
+          'Request took too long. Please check your connection and try again.',
+        );
       } else {
         Alert.alert('Error', 'Failed to submit answer. Please try again.');
       }
       setPhase('answering');
     } finally {
       clearTimeout(timeoutId);
-      setIsSubmitting(false);
     }
   }
 
@@ -122,14 +187,15 @@ export default function InterviewScreen() {
 
   async function endSession(finalScores: (number | null)[]) {
     try {
-      const res = await apiPatch<{ session: { readiness_delta: number | null; total_score: number | null } }>(
-        `/api/sessions/${sessionId}/end`,
-        { duration_seconds: timerSeconds }
-      );
+      const res = await apiPatch<{
+        session: { readiness_delta: number | null; total_score: number | null };
+      }>(`/api/sessions/${sessionId}/end`, { duration_seconds: timerSeconds });
       queryClient.invalidateQueries({ queryKey: ['sessions'] });
       queryClient.invalidateQueries({ queryKey: ['analytics'] });
       const valid = finalScores.filter(s => s != null) as number[];
-      const avg = valid.length ? valid.reduce((a, b) => a + b, 0) / valid.length : (res.session.total_score ?? 0);
+      const avg = valid.length
+        ? valid.reduce((a, b) => a + b, 0) / valid.length
+        : (res.session.total_score ?? 0);
       resetSession();
       router.replace({
         pathname: '/session/result/[sessionId]',
@@ -162,13 +228,17 @@ export default function InterviewScreen() {
     }
   }
 
-  function skip() { advance(null); }
+  function skip() {
+    advance(null);
+  }
 
   async function toggleBank() {
     if (!currentQuestion || isSavingToBank) return;
     setIsSavingToBank(true);
     try {
-      const res = await apiPatch<{ is_template: boolean }>(`/api/questions/${currentQuestion.id}/save-to-bank`);
+      const res = await apiPatch<{ is_template: boolean }>(
+        `/api/questions/${currentQuestion.id}/save-to-bank`,
+      );
       setSavedToBank(res.is_template);
     } catch {
       Alert.alert('Error', 'Could not update question. Please try again.');
@@ -177,9 +247,22 @@ export default function InterviewScreen() {
     }
   }
 
+  const progressDots = useMemo(
+    () =>
+      Array.from({ length: totalCount }).map((_, i) => (
+        <View key={i} style={[styles.dot, i < questionIndex && styles.dotActive]} />
+      )),
+    [totalCount, questionIndex],
+  );
+
   if (!currentQuestion) {
     return (
-      <View style={[styles.outer, { backgroundColor: theme.bg, alignItems: 'center', justifyContent: 'center' }]}>
+      <View
+        style={[
+          styles.outer,
+          { backgroundColor: theme.bg, alignItems: 'center', justifyContent: 'center' },
+        ]}
+      >
         <ActivityIndicator color={theme.blue700} size="large" />
       </View>
     );
@@ -198,23 +281,39 @@ export default function InterviewScreen() {
         </TouchableOpacity>
         <View style={styles.timerRow}>
           <Icon name="clock" size={15} color="rgba(255,255,255,0.7)" />
-          <Text style={styles.timer}>{mm}:{ss}</Text>
+          <Text style={styles.timer}>
+            {mm}:{ss}
+          </Text>
         </View>
-        <Text style={styles.progress}>{questionIndex}/{totalCount}</Text>
+        <Text style={styles.progress}>
+          {questionIndex}/{totalCount}
+        </Text>
       </View>
-      <View style={styles.dots}>
-        {Array.from({ length: totalCount }).map((_, i) => (
-          <View key={i} style={[styles.dot, i < questionIndex && styles.dotActive]} />
-        ))}
-      </View>
+      <View style={styles.dots}>{progressDots}</View>
 
-      <ScrollView ref={scrollRef} style={styles.scroll} contentContainerStyle={styles.scrollContent}>
+      <ScrollView
+        ref={scrollRef}
+        style={styles.scroll}
+        contentContainerStyle={styles.scrollContent}
+      >
         <View style={styles.categoryRow}>
-          <Badge tone={q.category === 'behavioral' ? 'info' : q.category === 'system_design' ? 'amber' : 'success'}>
-            {q.category === 'system_design' ? 'System Design' : q.category.charAt(0).toUpperCase() + q.category.slice(1)}
+          <Badge
+            tone={
+              q.category === 'behavioral'
+                ? 'info'
+                : q.category === 'system_design'
+                  ? 'amber'
+                  : 'success'
+            }
+          >
+            {q.category === 'system_design'
+              ? 'System Design'
+              : q.category.charAt(0).toUpperCase() + q.category.slice(1)}
           </Badge>
           {q.estimated_answer_minutes && (
-            <Text style={[styles.duration, { color: theme.fgMuted }]}>~{q.estimated_answer_minutes} min</Text>
+            <Text style={[styles.duration, { color: theme.fgMuted }]}>
+              ~{q.estimated_answer_minutes} min
+            </Text>
           )}
         </View>
         <Text style={[styles.questionText, { color: theme.fg }]}>{q.text}</Text>
@@ -231,28 +330,54 @@ export default function InterviewScreen() {
         {phase === 'feedback' && feedback && <FeedbackCard fb={feedback} />}
       </ScrollView>
 
-      <View style={[styles.bottom, { borderTopColor: theme.border, backgroundColor: theme.surface }]}>
+      <View
+        style={[styles.bottom, { borderTopColor: theme.border, backgroundColor: theme.surface }]}
+      >
         {phase === 'answering' && !isVoice && (
           <View style={styles.textAnswerWrap}>
             <TextInput
-              value={answer} onChangeText={setAnswer}
-              placeholder="Type your answer…" placeholderTextColor={theme.fgMuted}
+              value={answer}
+              onChangeText={setAnswer}
+              placeholder="Type your answer…"
+              placeholderTextColor={theme.fgMuted}
               multiline
-              style={[styles.textarea, { borderColor: theme.border, backgroundColor: theme.elevated, color: theme.fg }]}
+              style={[
+                styles.textarea,
+                { borderColor: theme.border, backgroundColor: theme.elevated, color: theme.fg },
+              ]}
             />
             <View style={styles.textBtns}>
-              <Button variant="secondary" leadingIcon="skip" onPress={skip} style={{ flex: 0 }}>Skip</Button>
-              <Button leadingIcon="send" disabled={!answer.trim()} onPress={submitAnswer} style={{ flex: 1 }}>Submit Answer</Button>
+              <Button variant="secondary" leadingIcon="skip" onPress={skip} style={{ flex: 0 }}>
+                Skip
+              </Button>
+              <Button
+                leadingIcon="send"
+                disabled={!answer.trim()}
+                onPress={submitAnswer}
+                style={{ flex: 1 }}
+              >
+                Submit Answer
+              </Button>
             </View>
           </View>
         )}
         {phase === 'answering' && isVoice && (
-          <VoicePanel onSkip={skip} sessionId={sessionId ?? ''} questionId={q.id} onFeedback={(fb) => { setFeedback(fb); setPhase('feedback'); }} />
+          <VoicePanel
+            onSkip={skip}
+            sessionId={sessionId ?? ''}
+            questionId={q.id}
+            onFeedback={fb => {
+              setFeedback(fb);
+              setPhase('feedback');
+            }}
+          />
         )}
         {phase === 'analyzing' && (
           <View style={styles.analyzing}>
             <ActivityIndicator color={theme.blue700} size="small" />
-            <Text style={[styles.analyzingText, { color: theme.blue700 }]}>Analyzing your answer…</Text>
+            <Text style={[styles.analyzingText, { color: theme.blue700 }]}>
+              Analyzing your answer…
+            </Text>
           </View>
         )}
         {phase === 'feedback' && feedback && (
@@ -262,15 +387,26 @@ export default function InterviewScreen() {
               disabled={isSavingToBank}
               style={[bkStyles.btn, { borderColor: theme.border, backgroundColor: theme.surface }]}
             >
-              {isSavingToBank
-                ? <ActivityIndicator size="small" color={theme.blue700} />
-                : <Icon name={savedToBank ? 'bookmarkFilled' : 'bookmark'} size={18} color={savedToBank ? theme.blue700 : theme.fgMuted} />
-              }
-              <Text style={[bkStyles.label, { color: savedToBank ? theme.blue700 : theme.fgMuted }]}>
+              {isSavingToBank ? (
+                <ActivityIndicator size="small" color={theme.blue700} />
+              ) : (
+                <Icon
+                  name={savedToBank ? 'bookmarkFilled' : 'bookmark'}
+                  size={18}
+                  color={savedToBank ? theme.blue700 : theme.fgMuted}
+                />
+              )}
+              <Text
+                style={[bkStyles.label, { color: savedToBank ? theme.blue700 : theme.fgMuted }]}
+              >
                 {savedToBank ? 'Saved to Bank' : 'Save to Question Bank'}
               </Text>
             </TouchableOpacity>
-            <Button full trailingIcon={questionIndex >= totalCount ? 'check' : 'arrowRight'} onPress={() => advance(feedback.score)}>
+            <Button
+              full
+              trailingIcon={questionIndex >= totalCount ? 'check' : 'arrowRight'}
+              onPress={() => advance(feedback.score)}
+            >
               {questionIndex >= totalCount ? 'See Results' : 'Next Question'}
             </Button>
           </>
@@ -280,7 +416,12 @@ export default function InterviewScreen() {
   );
 }
 
-function VoicePanel({ onSkip, sessionId, questionId, onFeedback }: {
+function VoicePanel({
+  onSkip,
+  sessionId,
+  questionId,
+  onFeedback,
+}: {
   onSkip: () => void;
   sessionId: string;
   questionId: string;
@@ -302,7 +443,10 @@ function VoicePanel({ onSkip, sessionId, questionId, onFeedback }: {
   async function startRecording() {
     const { granted } = await requestRecordingPermissionsAsync();
     if (!granted) {
-      Alert.alert('Permission required', 'Microphone access is required to record your answer. Please enable it in Settings.');
+      Alert.alert(
+        'Permission required',
+        'Microphone access is required to record your answer. Please enable it in Settings.',
+      );
       return;
     }
     Speech.stop();
@@ -347,7 +491,8 @@ function VoicePanel({ onSkip, sessionId, questionId, onFeedback }: {
       formData.append('session_id', sessionId);
       formData.append('question_id', questionId);
       const result = await apiPostFormData<{ feedback: AnswerFeedback; transcript: string }>(
-        '/api/answers/voice', formData,
+        '/api/answers/voice',
+        formData,
       );
       onFeedback(result.feedback);
     } catch (e: any) {
@@ -364,10 +509,16 @@ function VoicePanel({ onSkip, sessionId, questionId, onFeedback }: {
       {isRecording && (
         <View style={vStyles.recRow}>
           <View style={[vStyles.recDot, { backgroundColor: theme.red }]} />
-          <Text style={[vStyles.recTimer, { color: theme.fg }]}>{mm}:{ss}</Text>
+          <Text style={[vStyles.recTimer, { color: theme.fg }]}>
+            {mm}:{ss}
+          </Text>
         </View>
       )}
-      {!isRecording && t === 0 && <Text style={[vStyles.hint, { color: theme.fgMuted }]}>Tap to record your spoken answer</Text>}
+      {!isRecording && t === 0 && (
+        <Text style={[vStyles.hint, { color: theme.fgMuted }]}>
+          Tap to record your spoken answer
+        </Text>
+      )}
       <View style={vStyles.btns}>
         {(isRecording || t > 0) && (
           <TouchableOpacity onPress={handleSkip}>
@@ -378,17 +529,19 @@ function VoicePanel({ onSkip, sessionId, questionId, onFeedback }: {
           onPress={handleMicPress}
           style={[vStyles.micBtn, isRecording && { backgroundColor: theme.red }]}
         >
-          {isRecording
-            ? <View style={vStyles.stopSquare} />
-            : <Icon name="mic" size={26} color="#FFFFFF" />
-          }
+          {isRecording ? (
+            <View style={vStyles.stopSquare} />
+          ) : (
+            <Icon name="mic" size={26} color="#FFFFFF" />
+          )}
         </TouchableOpacity>
-        {(t > 0 && !isRecording) && (
+        {t > 0 && !isRecording && (
           <TouchableOpacity onPress={handleSubmit} disabled={submitting}>
-            {submitting
-              ? <ActivityIndicator size="small" color={theme.blue700} />
-              : <Text style={[vStyles.submitText, { color: theme.blue700 }]}>Submit</Text>
-            }
+            {submitting ? (
+              <ActivityIndicator size="small" color={theme.blue700} />
+            ) : (
+              <Text style={[vStyles.submitText, { color: theme.blue700 }]}>Submit</Text>
+            )}
           </TouchableOpacity>
         )}
         {isRecording && <View style={{ width: 40 }} />}
@@ -405,12 +558,19 @@ const vStyles = StyleSheet.create({
   hint: { fontFamily: Font.regular, fontSize: 13 },
   btns: { flexDirection: 'row', alignItems: 'center', gap: 16 },
   skipText: { fontFamily: Font.semiBold, fontSize: 14 },
-  micBtn: { width: 64, height: 64, borderRadius: 999, backgroundColor: '#1B448B', alignItems: 'center', justifyContent: 'center' },
+  micBtn: {
+    width: 64,
+    height: 64,
+    borderRadius: 999,
+    backgroundColor: '#1B448B',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   stopSquare: { width: 22, height: 22, borderRadius: 5, backgroundColor: '#FFFFFF' },
   submitText: { fontFamily: Font.bold, fontSize: 14 },
 });
 
-function FeedbackCard({ fb }: { fb: AnswerFeedback }) {
+const FeedbackCard = memo(function FeedbackCard({ fb }: { fb: AnswerFeedback }) {
   const theme = useTheme();
   const col = scoreColor(fb.score);
   return (
@@ -430,13 +590,19 @@ function FeedbackCard({ fb }: { fb: AnswerFeedback }) {
             <Text style={[fbStyles.summary, { color: theme.fgMuted }]}>{fb.feedback_summary}</Text>
           </View>
         </View>
-        <View style={[fbStyles.bars, { borderTopColor: theme.border, borderBottomColor: theme.border }]}>
+        <View
+          style={[fbStyles.bars, { borderTopColor: theme.border, borderBottomColor: theme.border }]}
+        >
           <ScoreBar label="Structure" value={fb.score_structure} />
           <ScoreBar label="Technical" value={fb.score_technical} />
           <ScoreBar label="Clarity" value={fb.score_clarity} />
         </View>
-        {fb.feedback_strengths.length > 0 && <FbList tone="success" title="Strengths" items={fb.feedback_strengths} />}
-        {fb.feedback_weaknesses.length > 0 && <FbList tone="amber" title="To improve" items={fb.feedback_weaknesses} />}
+        {fb.feedback_strengths.length > 0 && (
+          <FbList tone="success" title="Strengths" items={fb.feedback_strengths} />
+        )}
+        {fb.feedback_weaknesses.length > 0 && (
+          <FbList tone="amber" title="To improve" items={fb.feedback_weaknesses} />
+        )}
         {fb.ai_recommendation && (
           <View style={[fbStyles.rec, { backgroundColor: theme.accentSoft }]}>
             <Icon name="sparkle" size={16} color={theme.blue700} fill />
@@ -446,9 +612,17 @@ function FeedbackCard({ fb }: { fb: AnswerFeedback }) {
       </Card>
     </View>
   );
-}
+});
 
-function FbList({ tone, title, items }: { tone: 'success' | 'amber'; title: string; items: string[] }) {
+const FbList = memo(function FbList({
+  tone,
+  title,
+  items,
+}: {
+  tone: 'success' | 'amber';
+  title: string;
+  items: string[];
+}) {
   const theme = useTheme();
   const col = tone === 'success' ? theme.green : theme.amber;
   return (
@@ -457,22 +631,39 @@ function FbList({ tone, title, items }: { tone: 'success' | 'amber'; title: stri
       {items.map((it, i) => (
         <View key={i} style={fbStyles.listRow}>
           <View style={[fbStyles.listDot, { backgroundColor: col + '33' }]}>
-            <Icon name={tone === 'success' ? 'check' : 'target'} size={11} color={col} strokeWidth={2.6} />
+            <Icon
+              name={tone === 'success' ? 'check' : 'target'}
+              size={11}
+              color={col}
+              strokeWidth={2.6}
+            />
           </View>
           <Text style={[fbStyles.listText, { color: theme.fg }]}>{it}</Text>
         </View>
       ))}
     </View>
   );
-}
+});
 
 const fbStyles = StyleSheet.create({
   wrap: { marginTop: 20 },
   header: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 },
-  headerText: { fontFamily: Font.bold, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.66 },
+  headerText: {
+    fontFamily: Font.bold,
+    fontSize: 11,
+    textTransform: 'uppercase',
+    letterSpacing: 0.66,
+  },
   headerLine: { flex: 1, height: 1 },
   scoreRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 14, marginBottom: 14 },
-  scoreTile: { width: 58, height: 58, borderRadius: 14, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  scoreTile: {
+    width: 58,
+    height: 58,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
   scoreNum: { fontFamily: Font.extraBold, fontSize: 24 },
   scoreLabel: { fontFamily: Font.bold, fontSize: 15 },
   summary: { fontFamily: Font.regular, fontSize: 13, marginTop: 2, lineHeight: 18 },
@@ -480,20 +671,56 @@ const fbStyles = StyleSheet.create({
   listWrap: { marginTop: 12 },
   listTitle: { fontFamily: Font.bold, fontSize: 13, marginBottom: 7 },
   listRow: { flexDirection: 'row', gap: 9, alignItems: 'flex-start', marginBottom: 7 },
-  listDot: { width: 18, height: 18, borderRadius: 999, alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 1 },
+  listDot: {
+    width: 18,
+    height: 18,
+    borderRadius: 999,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+    marginTop: 1,
+  },
   listText: { flex: 1, fontFamily: Font.regular, fontSize: 13.5, lineHeight: 19 },
-  rec: { flexDirection: 'row', gap: 9, marginTop: 12, padding: 12, borderRadius: 10, alignItems: 'flex-start' },
+  rec: {
+    flexDirection: 'row',
+    gap: 9,
+    marginTop: 12,
+    padding: 12,
+    borderRadius: 10,
+    alignItems: 'flex-start',
+  },
   recText: { flex: 1, fontFamily: Font.regular, fontSize: 13, lineHeight: 19 },
 });
 
 const styles = StyleSheet.create({
   outer: { flex: 1 },
-  sessionBar: { backgroundColor: '#1B448B', paddingTop: 56, paddingBottom: 8, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  closeBtn: { width: 32, height: 32, borderRadius: 999, backgroundColor: 'rgba(255,255,255,0.14)', alignItems: 'center', justifyContent: 'center' },
+  sessionBar: {
+    backgroundColor: '#1B448B',
+    paddingTop: 56,
+    paddingBottom: 8,
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  closeBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.14)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   timerRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   timer: { fontFamily: Font.semiBold, fontSize: 14, color: '#FFFFFF' },
   progress: { fontFamily: Font.bold, fontSize: 14, color: 'rgba(255,255,255,0.85)' },
-  dots: { backgroundColor: '#1B448B', flexDirection: 'row', gap: 5, paddingHorizontal: 16, paddingBottom: 14 },
+  dots: {
+    backgroundColor: '#1B448B',
+    flexDirection: 'row',
+    gap: 5,
+    paddingHorizontal: 16,
+    paddingBottom: 14,
+  },
   dot: { flex: 1, height: 4, borderRadius: 999, backgroundColor: 'rgba(255,255,255,0.22)' },
   dotActive: { backgroundColor: '#5BC98A' },
   scroll: { flex: 1 },
@@ -506,13 +733,38 @@ const styles = StyleSheet.create({
   conceptText: { fontFamily: Font.semiBold, fontSize: 11.5 },
   bottom: { borderTopWidth: 1, padding: 14, gap: 10 },
   textAnswerWrap: { gap: 10 },
-  textarea: { width: '100%', minHeight: 84, maxHeight: 120, borderWidth: 1, borderRadius: 10, padding: 11, fontFamily: Font.regular, fontSize: 15, lineHeight: 21 },
+  textarea: {
+    width: '100%',
+    minHeight: 84,
+    maxHeight: 120,
+    borderWidth: 1,
+    borderRadius: 10,
+    padding: 11,
+    fontFamily: Font.regular,
+    fontSize: 15,
+    lineHeight: 21,
+  },
   textBtns: { flexDirection: 'row', gap: 10 },
-  analyzing: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, height: 84 },
+  analyzing: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    height: 84,
+  },
   analyzingText: { fontFamily: Font.semiBold, fontSize: 15 },
 });
 
 const bkStyles = StyleSheet.create({
-  btn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, height: 44, borderRadius: 8, borderWidth: 1.5, width: '100%' },
+  btn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    height: 44,
+    borderRadius: 8,
+    borderWidth: 1.5,
+    width: '100%',
+  },
   label: { fontFamily: Font.semiBold, fontSize: 14 },
 });

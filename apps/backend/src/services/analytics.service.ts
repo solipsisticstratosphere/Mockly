@@ -23,13 +23,20 @@ export async function upsertDailySnapshot(userId: string) {
 
   if (!sessions?.length) return;
 
-  const last7 = sessions.slice(0, 7);
-  const avgScoreLast7 = last7.reduce((s, r) => s + (r.total_score ?? 0), 0) / last7.length;
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const last7 = sessions.filter(s => s.created_at >= sevenDaysAgo);
+  const avgScoreLast7 = last7.length
+    ? last7.reduce((s, r) => s + (r.total_score ?? 0), 0) / last7.length
+    : 0;
 
   const thirtyAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
   const sessionsLast30 = sessions.filter(s => s.created_at >= thirtyAgo).length;
 
-  const { data: profile } = await supabase.from('profiles').select('streak_count').eq('id', userId).single();
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('streak_count')
+    .eq('id', userId)
+    .single();
   const streakCount = profile?.streak_count ?? 0;
 
   const readiness_score = calcReadinessScore({ avgScoreLast7, streakCount, sessionsLast30 });
@@ -41,7 +48,10 @@ export async function upsertDailySnapshot(userId: string) {
     .not('score', 'is', null);
 
   const topicScores: Record<string, number[]> = {};
-  (answers ?? []).forEach((a: any) => {
+  const typedAnswers = answers as
+    | { score: number | null; questions: { topic: string } | null }[]
+    | null;
+  (typedAnswers ?? []).forEach(a => {
     const topic = a.questions?.topic;
     if (topic && a.score != null) {
       if (!topicScores[topic]) topicScores[topic] = [];
@@ -53,13 +63,16 @@ export async function upsertDailySnapshot(userId: string) {
     .filter(x => x.avg < 5)
     .map(x => x.t);
 
-  await supabase.from('analytics_snapshots').upsert({
-    user_id: userId,
-    snapshot_date: today,
-    avg_score: avgScoreLast7,
-    sessions_count: sessions.length,
-    questions_count: (answers ?? []).length,
-    readiness_score,
-    weak_topics,
-  }, { onConflict: 'user_id,snapshot_date' });
+  await supabase.from('analytics_snapshots').upsert(
+    {
+      user_id: userId,
+      snapshot_date: today,
+      avg_score: avgScoreLast7,
+      sessions_count: sessions.length,
+      questions_count: (answers ?? []).length,
+      readiness_score,
+      weak_topics,
+    },
+    { onConflict: 'user_id,snapshot_date' },
+  );
 }

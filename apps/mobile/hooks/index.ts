@@ -1,6 +1,13 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useInfiniteQuery } from '@tanstack/react-query';
 import { apiGet } from '../lib/api';
-import type { Profile, AnalyticsSummary, AnalyticsSnapshot, WeakTopic, Session, Question } from '@mockly/shared';
+import type {
+  Profile,
+  AnalyticsSummary,
+  AnalyticsSnapshot,
+  WeakTopic,
+  Session,
+  Question,
+} from '@mockly/shared';
 
 export function useProfile() {
   return useQuery({
@@ -20,7 +27,9 @@ export function useAnalyticsHistory(days = 30) {
   return useQuery({
     queryKey: ['analytics', 'history', days],
     queryFn: () =>
-      apiGet<{ snapshots: AnalyticsSnapshot[] }>(`/api/analytics/history?days=${days}`).then(r => r.snapshots),
+      apiGet<{ snapshots: AnalyticsSnapshot[] }>(`/api/analytics/history?days=${days}`).then(
+        r => r.snapshots,
+      ),
   });
 }
 
@@ -36,7 +45,26 @@ export function useSessions(limit = 20) {
   return useQuery({
     queryKey: ['sessions', limit],
     queryFn: () =>
-      apiGet<{ sessions: Session[]; total: number }>(`/api/sessions?limit=${limit}`).then(r => r.sessions),
+      apiGet<{ sessions: Session[]; total: number }>(`/api/sessions?limit=${limit}`).then(
+        r => r.sessions,
+      ),
+  });
+}
+
+const SESSION_PAGE_SIZE = 20;
+
+export function useSessionsInfinite() {
+  return useInfiniteQuery({
+    queryKey: ['sessions', 'infinite'],
+    queryFn: ({ pageParam = 1 }) =>
+      apiGet<{ sessions: Session[]; total: number }>(
+        `/api/sessions?page=${pageParam}&limit=${SESSION_PAGE_SIZE}`,
+      ),
+    initialPageParam: 1,
+    getNextPageParam: (lastPage, allPages) => {
+      const fetched = allPages.length * SESSION_PAGE_SIZE;
+      return fetched < (lastPage.total ?? 0) ? allPages.length + 1 : undefined;
+    },
   });
 }
 

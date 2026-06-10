@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import * as Sentry from '@sentry/node';
 import { errorMiddleware } from './middleware/error.middleware';
 import { logger } from './config/logger';
 import authRoutes from './routes/auth.routes';
@@ -29,6 +30,7 @@ app.use('/api/questions', questionsRoutes);
 app.use('/api/answers', answersRoutes);
 app.use('/api/analytics', analyticsRoutes);
 
+Sentry.setupExpressErrorHandler(app);
 app.use(errorMiddleware);
 
 export default app;

@@ -1,4 +1,5 @@
 import React, { useEffect } from 'react';
+import * as Sentry from '@sentry/react-native';
 import { StatusBar } from 'react-native';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { QueryClientProvider } from '@tanstack/react-query';
@@ -19,6 +20,14 @@ import type { Profile } from '@mockly/shared';
 
 SplashScreen.preventAutoHideAsync();
 
+if (process.env.EXPO_PUBLIC_SENTRY_DSN) {
+  Sentry.init({
+    dsn: process.env.EXPO_PUBLIC_SENTRY_DSN,
+    environment: __DEV__ ? 'development' : 'production',
+    tracesSampleRate: __DEV__ ? 1.0 : 0.2,
+  });
+}
+
 export default function RootLayout() {
   const [fontsLoaded] = useFonts({
     Mulish_400Regular,
@@ -36,13 +45,19 @@ export default function RootLayout() {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setUser(session?.user ?? null);
       if (session?.user) {
-        apiGet<{ profile: Profile }>('/api/auth/profile').then(r => setProfile(r.profile)).catch(() => {});
+        apiGet<{ profile: Profile }>('/api/auth/profile')
+          .then(r => setProfile(r.profile))
+          .catch(err => console.error('[Auth] Failed to load profile:', err));
       }
     });
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user ?? null);
       if (session?.user) {
-        apiGet<{ profile: Profile }>('/api/auth/profile').then(r => setProfile(r.profile)).catch(() => {});
+        apiGet<{ profile: Profile }>('/api/auth/profile')
+          .then(r => setProfile(r.profile))
+          .catch(err => console.error('[Auth] Failed to load profile:', err));
       } else {
         setProfile(null);
       }

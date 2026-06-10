@@ -21,17 +21,19 @@ Mockly is a mobile app that simulates technical job interviews using AI. You ans
 
 ## Tech Stack
 
-| Layer | Technology |
-|---|---|
-| Mobile | Expo 56 / React Native 0.85 |
-| Navigation | Expo Router (file-based) |
-| State | Zustand + React Query |
-| Backend | Node.js / Express (TypeScript) |
-| Database | Supabase (PostgreSQL + Row Level Security) |
-| Auth | Supabase Auth (JWT RS256, email OTP) |
-| AI | Groq API (LLaMA 3) |
-| Shared types | `@mockly/shared` (internal monorepo package) |
-| Monorepo | npm workspaces |
+| Layer            | Technology                                                                             |
+| ---------------- | -------------------------------------------------------------------------------------- |
+| Mobile           | Expo 56 / React Native 0.85                                                            |
+| Navigation       | Expo Router (file-based)                                                               |
+| State            | Zustand + React Query                                                                  |
+| Backend          | Node.js / Express (TypeScript)                                                         |
+| Database         | Supabase (PostgreSQL + Row Level Security)                                             |
+| Auth             | Supabase Auth — JWKS local JWT verification (RS256/ES256, no network call per request) |
+| AI               | Groq API (LLaMA 3)                                                                     |
+| Error monitoring | Sentry (`@sentry/node` + `@sentry/react-native`)                                       |
+| Shared types     | `@mockly/shared` (internal monorepo package)                                           |
+| Monorepo         | npm workspaces                                                                         |
+| Code quality     | ESLint + Prettier + Husky pre-commit                                                   |
 
 ---
 
@@ -47,6 +49,7 @@ Mockly/
 │   │   │   ├── services/
 │   │   │   ├── middleware/
 │   │   │   └── config/
+│   │   └── Dockerfile    # Multi-stage production build
 │   └── mobile/           # Expo app
 │       ├── app/          # Expo Router screens
 │       │   ├── (tabs)/   # Home, History, Progress, Profile
@@ -55,8 +58,11 @@ Mockly/
 │       ├── hooks/
 │       ├── stores/       # Zustand stores
 │       └── utils/
-└── packages/
-    └── shared/           # Shared TypeScript types
+├── packages/
+│   └── shared/           # Shared TypeScript types & Zod schemas
+├── eslint.config.js      # ESLint flat config (backend + mobile)
+├── prettier.config.js    # Prettier config
+└── .husky/               # Git hooks (pre-commit: lint + format)
 ```
 
 ---
@@ -73,34 +79,90 @@ Mockly/
 ### Environment Variables
 
 **`apps/backend/.env`**
+
 ```env
 PORT=3000
+NODE_ENV=development
 SUPABASE_URL=
 SUPABASE_SERVICE_ROLE_KEY=
+SUPABASE_ANON_KEY=
 SUPABASE_JWT_SECRET=
 GROQ_API_KEY=
-ALLOWED_ORIGINS=http://localhost:8081
+ALLOWED_ORIGINS=http://localhost:8081,exp://localhost:8081
+SENTRY_DSN=                    # optional — get from sentry.io
+MAX_AUDIO_SIZE_MB=25
 ```
 
 **`apps/mobile/.env`**
+
 ```env
 EXPO_PUBLIC_API_URL=http://localhost:3000
 EXPO_PUBLIC_SUPABASE_URL=
 EXPO_PUBLIC_SUPABASE_ANON_KEY=
+EXPO_PUBLIC_SENTRY_DSN=        # optional — can share with backend DSN
 ```
 
 ### Install & Run
 
 ```bash
-# Install all dependencies
+# Install all dependencies (also activates Husky git hooks)
 npm install
 
+# Build the shared package (required before first backend start)
+npm run build -w @mockly/shared
+
 # Start the backend
-cd apps/backend && npm run dev
+npm run backend
 
 # Start the mobile app (new terminal)
-cd apps/mobile && npx expo start
+npm run mobile
 ```
+
+### Code Quality
+
+```bash
+# Lint all workspaces
+npm run lint
+
+# Auto-fix lint issues
+npm run lint:fix
+
+# Format all files
+npm run format
+
+# Check formatting without writing
+npm run format:check
+```
+
+The pre-commit hook runs lint + format automatically on staged files via Husky.
+
+---
+
+## Deploying the Backend
+
+The backend ships with a production-ready multi-stage Dockerfile:
+
+```bash
+# Build from monorepo root
+docker build -f apps/backend/Dockerfile -t mockly-backend .
+
+# Run
+docker run -p 3000:3000 --env-file apps/backend/.env mockly-backend
+```
+
+The image:
+
+- Compiles TypeScript in a builder stage, copies only the compiled output to the runtime stage
+- Runs as non-root (`node` user)
+- Exposes `GET /health` for container health checks (Docker `HEALTHCHECK` configured)
+
+---
+
+## Error Monitoring (Sentry)
+
+Set `SENTRY_DSN` in `apps/backend/.env` and `EXPO_PUBLIC_SENTRY_DSN` in `apps/mobile/.env` to enable Sentry. Both values can point to the same Sentry project or separate ones.
+
+Get your DSN from **sentry.io → Project Settings → Client Keys**.
 
 ---
 
